@@ -2,37 +2,60 @@
   (let ((null? null?)
 	(car car) (cdr cdr)
 	(cons cons) (apply apply))
-  (letrec ((map-many
-	    (lambda (f lists)
-	      (if (null? (car lists))
-		  '()
-		  (cons
-		   (apply f (map-one car lists))
-		   (map-many f (map-one cdr lists))))))
-	   (map-one
-	    (lambda (f s)
-	      (if (null? s)
-		  '()
-		  (cons (f (car s))
-			(map-one f (cdr s)))))))
-    (lambda (f . args)
-      (map-many f args)))))
+    (letrec ((map-loop (lambda (f l . ls)
+		     (if (null? l)
+			 '() 
+			 (if (null? ls)
+			     (cons (f (car l)) (map-loop f (cdr l)))
+			     (cons (apply f (car l) (map-loop car ls))
+				   (apply map f (cdr l) (map-loop cdr ls))))))))
+      map-loop)))
 
 
-(define fold-left 
-  #;(Add your implementation here
-     Note: The file won't compile like this, beacuase your tag-parser requires define to have a second expression.
-     This is on purpose, so you don't compile the library without completing this implementation by mistake.))
+(define fold-left
+  (let ((null? null?)
+		(car car)
+		(cdr cdr))
+	(letrec ((fold 
+			  (lambda (f res lst)
+			  	(if (null? (cdr lst))
+					(f res (car lst))
+					(fold f (f res (car lst)) (cdr lst))))))
+			
+	  (lambda (f base args)
+	  	(if (null? args)
+		  base
+		  (fold f base args))))))
+	
 
 (define fold-right
-  #;(Add your implementation here
-     Note: The file won't compile like this, beacuase your tag-parser requires define to have a second expression.
-     This is on purpose, so you don't compile the library without completing this implementation by mistake.))
+  (let ((null? null?)
+		(car car)
+		(cdr cdr))
+	(letrec ((fold 
+			  (lambda (f b lst)
+			  	(if (null? (cdr lst))
+					(f (car lst) b)
+					(f (car lst) (fold f b (cdr lst)))))))
+			
+	  (lambda (f base args)
+	  	  (if (null? args)
+		  	  base
+		  	  (fold f base args))))))
 
 (define cons*
-  #;(Add your implementation here
-     Note: The file won't compile like this, beacuase your tag-parser requires define to have a second expression.
-     This is on purpose, so you don't compile the library without completing this implementation by mistake.))
+  (let ((cons cons)
+	  	(null? null?)
+	  	(car car)
+		(cdr cdr))
+	(letrec ((cons-rec
+				(lambda (lst)
+					(if (null? (cdr lst)) 
+						(car lst)
+						(cons (car lst) (cons-rec (cdr lst)))))))
+	  (lambda (arg . opt)
+	  	(cons-rec (cons arg opt))))))
+
 
 (define append
   (let ((null? null?)
