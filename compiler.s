@@ -155,22 +155,76 @@
         dq %3
 %endmacro
 
+%macro MAKE_SINGLE_LIT 2
+	db %1
+		dq %2
+%endmacro
+
+%macro MAKE_LITERAL_STRING 1
+	db T_STRING
+	dq (%%end_str- %%str)
+%%str:
+	db %1
+%%end_str:
+%endmacro
+
+%macro MAKE_CHAR_LIT 2
+	db %1
+        db %2
+%endmacro
+
+%macro MAKE_LITERAL_VECTOR 0-*
+	db T_VECTOR
+	dq %0
+%rep %0
+	dq %1
+%rotate 1
+%endrep
+%endmacro
+
 %define MAKE_RATIONAL(r, num, den) \
 	MAKE_TWO_WORDS r, T_RATIONAL, num, den
 
 %define MAKE_LITERAL_RATIONAL(num, den) \
 	MAKE_WORDS_LIT T_RATIONAL, num, den
-	
+
+%define MAKE_LITERAL_SYMBOL(sym)\
+	 	MAKE_SINGLE_LIT T_SYMBOL, sym
+
+%define MAKE_LITERAL_CHAR(ch) \
+	MAKE_CHAR_LIT T_CHAR, ch
+
 %define MAKE_PAIR(r, car, cdr) \
         MAKE_TWO_WORDS r, T_PAIR, car, cdr
 
 %define MAKE_LITERAL_PAIR(car, cdr) \
         MAKE_WORDS_LIT T_PAIR, car, cdr
 
+%define MAKE_LITERAL_FLOAT(real) \
+		MAKE_SINGLE_LIT T_FLOAT, real
+
+
 %define MAKE_CLOSURE(r, env, body) \
         MAKE_TWO_WORDS r, T_CLOSURE, env, body
 
-	
+%define PARAM_COUNT [rbp + WORD_SIZE * 3]
+
+%macro SHIFT_FRAME 1
+
+		mov rax, PARAM_COUNT
+		add rax, 5
+	%assign i 1
+
+	%rep %1
+		dec rax
+		mov rbx, [rbp - WORD_SIZE * i]
+		mov qword [rbp + WORD_SIZE * rax], rbx
+		%assign i i+1
+	%endrep
+
+%endmacro
+
+
 ;;; Macros and routines for printing Scheme OBjects to STDOUT
 %define CHAR_NUL 0
 %define CHAR_TAB 9
@@ -755,7 +809,7 @@ write_sob_if_not_void:
 	je .continue
 
 	call write_sob
-	
+
 	mov rax, 0
 	mov rdi, .newline
 	call printf
