@@ -4,7 +4,6 @@
    The module works by defining a hierarchy of templates, which call each other
    to form complete routines. See the inline comments below for more information
    on the templates and the individual routines.
-
    Note that the implementation below contain no error handling or correctness-checking
    of any kind. This is because we will not test your compilers on invalid input.
    However, adding correctness-checking and error handling *as general templates* would be
@@ -25,6 +24,9 @@ module Prims : PRIMS = struct
        " ^ body ^ "
          pop rbp
          ret";;
+  
+  let make_apply label body =
+    label ^":\n" ^body
 
   (* Many of the low-level stdlib procedures are predicate procedures, which perform 
      some kind of comparison, and then return one of the constants sob_true or sob_false.
@@ -56,7 +58,6 @@ module Prims : PRIMS = struct
      The argument register assignment follows the x86 64bit Unix ABI, because there needs to be *some*
      kind of consistency, so why not just use the standard ABI.
      See page 22 in https://raw.githubusercontent.com/wiki/hjl-tools/x86-psABI/x86-64-psABI-1.0.pdf
-
      *** FIXME: There's a typo here: PVAR(0) should be rdi, PVAR(1) should be rsi, according to the ABI     
    *)
   let make_unary label body = make_routine label ("mov rsi, PVAR(0)\n\t" ^ body);;
@@ -130,7 +131,6 @@ module Prims : PRIMS = struct
      on the heap with the result, and store the address of the sob_float in rax as the return value.
      This allows us to easily abstract this code into a template that requires a label name and its matching
      arithmetic instruction (which are paired up in the op_map).
-
      Operations on fractional operands:
      ----------------------------------
      The addition and multiplication operations on rational numbers are similar to each other: both load 2 arguments,
@@ -143,7 +143,6 @@ module Prims : PRIMS = struct
      Unlike in the case of floating point arithmetic, rational division is treated differently, and is implemented by
      using the identity (a/b) / (c/d) == (a/b) * (d/c).
      This is done by inverting the second arg (in PVAR(1)) and tail-calling fraction multiplication (`jmp mul`).
-
      Comparators:
      ------------
      While the implementation of the Comparators is slightly more complex, since they make use of `return_boolean`,
@@ -346,12 +345,157 @@ module Prims : PRIMS = struct
          jge .make_result
          neg rdx
          .make_result:
-         MAKE_RATIONAL(rax, rdx, 1)", make_binary, "gcd";  
+         MAKE_RATIONAL(rax, rdx, 1)", make_binary, "gcd";
+         
+         (* car *)
+         "CAR rax, rsi", make_unary, "car";
+
+         (* cdr *)
+         "CDR rax, rsi", make_unary, "cdr";
+
+         (* set_car *)
+         "lea rsi, [rsi+TYPE_SIZE]
+         mov [rsi] ,rdi
+         mov rax, SOB_VOID_ADDRESS", make_unary, "set_car";
+
+         (* set_cdr *)
+         "lea rsi, [rsi+TYPE_SIZE+WORD_SIZE]
+         mov [rsi] ,rdi
+         mov rax, SOB_VOID_ADDRESS", make_unary, "set_cdr";
+
+         (* cons *)
+         "MAKE_PAIR(rax, rsi, rdi)", make_binary, "cons";
+
+         (* apply v1 *)
+         "mov rcx, 0
+         mov rdx, PARAM_COUNT                             ;; rdx = arg_count
+         add rdx, 3                                       ;; to use as index to s
+         mov rsi, qword [rbp + rdx*WORD_SIZE]             ;; rsi points to s
+         
+         push SOB_NIL_ADDRESS                             ;; push magic for new frame
+         
+         ;; Extract S's arguments
+         L_start_extract_s:
+         cmp rsi, SOB_NIL_ADDRESS
+         je L_end_extract_s
+         CAR rdi, rsi
+         push rdi
+         inc rcx
+         CDR rsi, rsi
+         jmp L_start_extract_s
+         
+         L_end_extract_s:
+         
+         ;; Push S's arguments
+         mov rbx, rcx                              ;; rbx = rcx = length of s
+         cmp rcx, 0                                ;; loop guard
+         je L_copy_x
+         
+         mov rsi, rsp
+         sub rsi, WORD_SIZE                        ;; adjust to use correct value in loop
+         
+         L_start_push_s:
+         add rsi, WORD_SIZE
+         push qword [rsi]
+         loop L_start_push_s
+         
+         ;; Shift S's arguments up in stack (below magic for new frame)
+         mov rsi, rsp
+         mov rcx, rbx                              ;; rcx = rbx = length of s
+         shl rcx, 3                                ;; multiple by WORD_SIZE
+         add rsi, rcx                              ;; rsi points to rsp + (length of s)
+         sub rsi, WORD_SIZE                        ;; adjust to use correct value in loop
+         mov rcx, rbx                              ;; rcx = rbx = length of s
+         ;; No need for loop guard because length of s is checked above and if zero jumps to L_copy_x
+         L_start_shift_s:
+         pop rax
+         add rsi, WORD_SIZE
+         mov qword [rsi], rax
+         loop L_start_shift_s
+         
+         L_copy_x:
+         ;; Copy Xs to new frame
+         mov rcx, PARAM_COUNT                      ;; rcx = arg_count
+         mov rdx, rcx                              ;; rdx = arg_count
+         add rdx, 3                                ;; skip frame bottom          
+         dec rdx                                   ;; to use as index to point X_n-1
+         shl rdx, 3                                ;; multiple by WORD_SIZE
+         mov rsi, rbp
+         add rsi, rdx                              ;; rsi points to X_n-1
+         add rsi, WORD_SIZE                        ;; adjust to use correct value in loop
+         
+         sub rcx, 2                                ;; rcx = number of Xs (number of Xs is arg_count - 1 (proc) - 1(s))
+         cmp rcx, 0                                ;; loop guard
+         je L_copy_rest
+         
+         L_loop_copy_x:
+         sub rsi, WORD_SIZE
+         push qword [rsi]
+         loop L_loop_copy_x
+         
+         ;; Copy rest for new frame
+         L_copy_rest:
+         mov rdx, PARAM_COUNT                      ;; rdx = arg_count
+         sub rdx, 2                                ;; rdx = number of Xs = arg_count - 2
+         add rdx, rbx                              ;; rdx = new arg_count = number of Xs + length of s
+         push rdx                                  ;; push new arg_count
+         
+         sub rsi, WORD_SIZE                        ;; rsi points to proc
+         mov rdi, qword [rsi]                      ;; rdi = closure of proc
+         CLOSURE_ENV rax, rdi                      ;; rax = env of proc
+         push rax                                  ;; push env
+         
+         mov rsi, qword [rbp + 1*WORD_SIZE]        ;; rsi points to ret_addr
+         push qword rsi                            ;; push ret_addr
+         
+         push qword [rbp]                          ;; push dereference of old_rbp
+         
+         ;; Shift new frame to override current frame
+         add rdx, 5                                ;; set counter to shift frame
+         mov rcx, rdx                              ;; counter to shift frame
+         
+         mov rax, PARAM_COUNT
+         add rax, 5
+         mov rdx, -1                               ;; used as index in loop
+         
+         ;; No need for loop guard because rcx is at least 5
+         L_loop_shift_frame:
+         dec rax
+         mov rbx, [rbp + WORD_SIZE * rdx]
+         mov qword [rbp + WORD_SIZE * rax], rbx
+         dec rdx
+         loop L_loop_shift_frame
+         
+         ;; Move control to the new frame after overrinding the current frame
+         ;; Adjust rbp and rsp for a return from tail position
+         ;; Last copied value is old_rbp for the new frame which where rbp should be now
+         cmp rax, 0
+         je l_end_adjust_rbp
+         mov rcx, rax
+         mov rax, WORD_SIZE
+         cmp rcx, 0
+         jg l_loop_adjust_rbp
+         neg rcx
+         mov rax, -WORD_SIZE
+         l_loop_adjust_rbp:
+         add rbp, rax
+         loop l_loop_adjust_rbp
+         
+         l_end_adjust_rbp:
+         
+         ;; Imitates 'leave'
+         mov rsp, rbp
+         add rsp, WORD_SIZE                 ;; same as 'pop rbp' (pop adds WORD_SIZE to rsp)
+         mov rbp, [rbp]
+         
+         CLOSURE_CODE rax, rdi              ;; rax = code of proc
+         jmp rax                            ;; call code", make_routine, "apply";
+
       ] in
     String.concat "\n\n" (List.map (fun (a, b, c) -> (b c a)) misc_parts);;
 
   (* This is the interface of the module. It constructs a large x86 64-bit string using the routines
      defined above. The main compiler pipline code (in compiler.ml) calls into this module to get the
      string of primitive procedures. *)
-  let procs = String.concat "\n\n" [type_queries ; numeric_ops; misc_ops];;
+  let procs = String.concat "\n\n" [type_queries; numeric_ops; misc_ops];;
 end;;
