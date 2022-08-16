@@ -49,7 +49,7 @@ module PC = struct
   
   exception X_not_yet_implemented;;
 
-  exception X_no_match;;
+  exception X_no_match;;  
 
   let const pred =
     ((fun str index ->
